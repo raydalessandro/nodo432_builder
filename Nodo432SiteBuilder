@@ -1,0 +1,527 @@
+"""
+Nodo432 Site Builder
+Automazione completa per generazione siti HTML da brand manual
+Usa DeepSeek Reasoning API + GitHub per deploy automatico
+"""
+
+import os
+import json
+import yaml
+import base64
+from datetime import datetime
+from typing import Dict, List, Optional
+import requests
+from github import Github
+from pathlib import Path
+
+class Nodo432SiteBuilder:
+    def __init__(self, deepseek_api_key: str, github_token: str):
+        """
+        Inizializza il builder con le API keys necessarie
+        """
+        self.deepseek_api_key = deepseek_api_key
+        self.github = Github(github_token)
+        self.github_user = self.github.get_user()
+        
+        # Template base per struttura sito
+        self.base_template = """<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <meta name="description" content="{description}">
+    {styles}
+</head>
+<body>
+    {content}
+</body>
+</html>"""
+
+    def call_deepseek(self, prompt: str, system_prompt: str = None) -> str:
+        """
+        Chiama DeepSeek API per generazione contenuti
+        """
+        headers = {
+            "Authorization": f"Bearer {self.deepseek_api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        
+        data = {
+            "model": "deepseek-reasoner",  # o "deepseek-chat" se preferisci
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 4000
+        }
+        
+        response = requests.post(
+            "https://api.deepseek.com/v1/chat/completions",
+            headers=headers,
+            json=data
+        )
+        
+        if response.status_code == 200:
+            return response.json()['choices'][0]['message']['content']
+        else:
+            raise Exception(f"DeepSeek API error: {response.status_code} - {response.text}")
+
+    def load_brand_manual(self, manual_path: str) -> Dict:
+        """
+        Carica il manuale di risonanza del brand (YAML o JSON)
+        """
+        with open(manual_path, 'r', encoding='utf-8') as file:
+            if manual_path.endswith('.yaml') or manual_path.endswith('.yml'):
+                return yaml.safe_load(file)
+            elif manual_path.endswith('.json'):
+                return json.load(file)
+            else:
+                # Assume it's plain text, structure it
+                content = file.read()
+                return {"brand_text": content}
+
+    def generate_site_structure(self, brand_data: Dict) -> Dict:
+        """
+        Genera la struttura del sito basata sul brand
+        """
+        system_prompt = """Sei un architetto di siti web minimalisti.
+Analizza il brand e genera una struttura sito essenziale.
+Output in JSON con: pages (lista pagine), navigation (menu), features (punti chiave)."""
+
+        prompt = f"""Analizza questo brand e genera struttura sito minimalista:
+
+Brand Data: {json.dumps(brand_data, ensure_ascii=False)}
+
+Genera JSON con:
+- pages: lista di pagine necessarie
+- navigation: struttura menu
+- features: 3-5 punti chiave del brand
+- colors: palette colori suggerita (hex)
+- tone: tono di voce per i copy"""
+
+        response = self.call_deepseek(prompt, system_prompt)
+        
+        # Estrai JSON dalla risposta
+        try:
+            # Rimuovi eventuali backticks markdown
+            response = response.replace('```json', '').replace('```', '').strip()
+            return json.loads(response)
+        except:
+            # Fallback se non è JSON valido
+            return {
+                "pages": ["index.html", "servizi.html", "contatti.html"],
+                "features": ["Veloce", "Affidabile", "Locale"],
+                "colors": {"primary": "#111", "secondary": "#666"},
+                "tone": "Professionale ma amichevole"
+            }
+
+    def generate_css(self, brand_data: Dict, site_structure: Dict) -> str:
+        """
+        Genera CSS minimalista basato sul brand
+        """
+        colors = site_structure.get('colors', {})
+        
+        css = f"""
+:root {{
+    --primary: {colors.get('primary', '#111')};
+    --secondary: {colors.get('secondary', '#666')};
+    --bg: #ffffff;
+    --text: #111;
+    --border: #e5e7eb;
+    --max-width: 1120px;
+}}
+
+* {{
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}}
+
+body {{
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    line-height: 1.6;
+    color: var(--text);
+    background: var(--bg);
+}}
+
+.container {{
+    max-width: var(--max-width);
+    margin: 0 auto;
+    padding: 0 20px;
+}}
+
+header {{
+    border-bottom: 1px solid var(--border);
+    padding: 20px 0;
+    position: sticky;
+    top: 0;
+    background: rgba(255,255,255,0.95);
+    backdrop-filter: blur(10px);
+    z-index: 100;
+}}
+
+nav {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}}
+
+nav ul {{
+    display: flex;
+    gap: 30px;
+    list-style: none;
+}}
+
+nav a {{
+    text-decoration: none;
+    color: var(--text);
+    font-weight: 500;
+    transition: color 0.3s;
+}}
+
+nav a:hover {{
+    color: var(--primary);
+}}
+
+.hero {{
+    padding: 80px 0;
+    text-align: center;
+}}
+
+.hero h1 {{
+    font-size: clamp(2rem, 5vw, 3.5rem);
+    margin-bottom: 20px;
+    font-weight: 800;
+}}
+
+.hero p {{
+    font-size: 1.25rem;
+    color: var(--secondary);
+    max-width: 600px;
+    margin: 0 auto 30px;
+}}
+
+.btn {{
+    display: inline-block;
+    padding: 12px 30px;
+    background: var(--primary);
+    color: white;
+    text-decoration: none;
+    border-radius: 8px;
+    font-weight: 600;
+    transition: transform 0.3s, box-shadow 0.3s;
+}}
+
+.btn:hover {{
+    transform: translateY(-2px);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+}}
+
+.features {{
+    padding: 60px 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 40px;
+}}
+
+.feature {{
+    padding: 30px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    transition: transform 0.3s, box-shadow 0.3s;
+}}
+
+.feature:hover {{
+    transform: translateY(-5px);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+}}
+
+.feature h3 {{
+    margin-bottom: 15px;
+    font-size: 1.5rem;
+}}
+
+.feature p {{
+    color: var(--secondary);
+    line-height: 1.8;
+}}
+
+footer {{
+    margin-top: 80px;
+    padding: 40px 0 20px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    color: var(--secondary);
+}}
+
+@media (max-width: 768px) {{
+    nav ul {{
+        flex-direction: column;
+        gap: 15px;
+    }}
+    
+    .features {{
+        grid-template-columns: 1fr;
+        gap: 20px;
+    }}
+}}
+
+/* Performance: tutto inline, niente font esterni, niente JS non necessario */
+"""
+        return css
+
+    def generate_page_content(self, page_name: str, brand_data: Dict, site_structure: Dict) -> str:
+        """
+        Genera contenuto HTML per una specifica pagina
+        """
+        system_prompt = """Sei un copywriter minimalista che crea contenuti web essenziali.
+Genera solo HTML semantico con copy che risuona con il brand.
+No Javascript, no complessità. Solo tag HTML e testo potente."""
+
+        features_html = ""
+        if page_name == "index.html" and 'features' in site_structure:
+            features_list = site_structure['features']
+            features_prompt = f"Genera 3 feature blocks per: {features_list}"
+            features_html = self.generate_features(brand_data, features_list)
+
+        prompt = f"""Genera contenuto HTML per pagina '{page_name}'.
+
+Brand: {json.dumps(brand_data, ensure_ascii=False)}
+Tono: {site_structure.get('tone', 'Professionale')}
+Features principali: {site_structure.get('features', [])}
+
+Genera:
+1. Header con navigation
+2. Hero section con titolo e sottotitolo potenti
+3. {f"Feature section con: {features_html}" if features_html else "Contenuto principale"}
+4. CTA section
+5. Footer minimale
+
+Solo HTML semantico, no CSS inline, no JS."""
+
+        content = self.call_deepseek(prompt, system_prompt)
+        
+        # Pulisci eventuali backticks
+        content = content.replace('```html', '').replace('```', '').strip()
+        
+        return content
+
+    def generate_features(self, brand_data: Dict, features: List[str]) -> str:
+        """
+        Genera sezione features
+        """
+        features_html = '<section class="features container">\n'
+        
+        for feature in features[:3]:  # Max 3 features
+            prompt = f"Per il brand {brand_data.get('nome', 'questo brand')}, scrivi un paragrafo breve (max 50 parole) su: {feature}. Solo testo, no HTML."
+            description = self.call_deepseek(prompt)
+            
+            features_html += f"""
+    <div class="feature">
+        <h3>{feature}</h3>
+        <p>{description}</p>
+    </div>"""
+        
+        features_html += '\n</section>'
+        return features_html
+
+    def create_github_repo(self, client_name: str) -> any:
+        """
+        Crea repository GitHub per il cliente
+        """
+        repo_name = f"{client_name.lower().replace(' ', '-')}-site"
+        
+        # Check if repo exists
+        try:
+            repo = self.github_user.get_repo(repo_name)
+            print(f"Repository {repo_name} già esistente, uso quello")
+            return repo
+        except:
+            # Create new repo
+            repo = self.github_user.create_repo(
+                repo_name,
+                description=f"Sito web per {client_name} - Powered by Nodo432",
+                private=False,  # Cambia in True per repo privati
+                auto_init=False
+            )
+            print(f"Repository {repo_name} creato con successo")
+            return repo
+
+    def push_to_github(self, repo: any, files: Dict[str, str], commit_message: str = "Initial site generation"):
+        """
+        Pusha i file nel repository GitHub
+        """
+        for file_path, content in files.items():
+            try:
+                # Check if file exists
+                try:
+                    existing_file = repo.get_contents(file_path)
+                    repo.update_file(
+                        file_path,
+                        commit_message,
+                        content,
+                        existing_file.sha
+                    )
+                    print(f"Aggiornato: {file_path}")
+                except:
+                    # Create new file
+                    repo.create_file(
+                        file_path,
+                        commit_message,
+                        content
+                    )
+                    print(f"Creato: {file_path}")
+            except Exception as e:
+                print(f"Errore nel push di {file_path}: {e}")
+
+    def build_site(self, brand_manual_path: str, client_name: str) -> str:
+        """
+        Processo completo: dal brand manual al sito deployato
+        """
+        print(f"🚀 Inizio generazione sito per: {client_name}")
+        
+        # 1. Carica brand manual
+        print("📖 Carico brand manual...")
+        brand_data = self.load_brand_manual(brand_manual_path)
+        brand_data['nome'] = client_name
+        
+        # 2. Genera struttura
+        print("🏗️ Genero struttura sito...")
+        site_structure = self.generate_site_structure(brand_data)
+        
+        # 3. Genera CSS
+        print("🎨 Genero stili...")
+        css = self.generate_css(brand_data, site_structure)
+        
+        # 4. Genera pagine
+        print("📝 Genero contenuti...")
+        pages = {}
+        for page in site_structure.get('pages', ['index.html']):
+            print(f"   Genero {page}...")
+            content = self.generate_page_content(page, brand_data, site_structure)
+            
+            # Assembla pagina completa
+            full_html = self.base_template.format(
+                title=f"{client_name} - {page.replace('.html', '').title()}",
+                description=brand_data.get('descrizione', f'Sito web di {client_name}'),
+                styles=f"<style>{css}</style>",
+                content=content
+            )
+            pages[page] = full_html
+        
+        # 5. Crea repo GitHub
+        print("📦 Creo repository GitHub...")
+        repo = self.create_github_repo(client_name)
+        
+        # 6. Pusha files
+        print("🚢 Deploy su GitHub...")
+        files_to_push = pages
+        files_to_push['README.md'] = f"""# {client_name}
+
+Sito generato automaticamente da Nodo432 Site Builder
+
+## Brand Essence
+{brand_data.get('essenza', 'Sito web professionale')}
+
+## Deployed at
+https://{self.github_user.login}.github.io/{repo.name}/
+
+---
+*Powered by Nodo432 - EAR Marketing*
+"""
+        
+        self.push_to_github(repo, files_to_push, f"Generazione sito per {client_name}")
+        
+        # 7. Abilita GitHub Pages (opzionale)
+        github_pages_url = f"https://{self.github_user.login}.github.io/{repo.name}/"
+        
+        print(f"✅ Sito generato con successo!")
+        print(f"📍 Repository: {repo.html_url}")
+        print(f"🌐 URL sito (dopo attivazione Pages): {github_pages_url}")
+        
+        return repo.html_url
+
+# ============= ESEMPIO DI UTILIZZO =============
+
+def main():
+    """
+    Esempio di utilizzo del builder
+    """
+    # Configura le tue API keys (in Colab usa Secrets)
+    DEEPSEEK_API_KEY = "your_deepseek_api_key"  # os.environ.get('DEEPSEEK_API_KEY')
+    GITHUB_TOKEN = "your_github_token"  # os.environ.get('GITHUB_TOKEN')
+    
+    # Inizializza builder
+    builder = Nodo432SiteBuilder(DEEPSEEK_API_KEY, GITHUB_TOKEN)
+    
+    # Esempio di brand manual (salvalo come brand_manual.yaml)
+    brand_manual_example = """
+brand:
+  nome: "Il Pane dei Fratelli"
+  essenza: "Il panificio che non dorme mai"
+  valori:
+    - Tradizione
+    - Disponibilità 24h
+    - Qualità artigianale
+  
+target:
+  primario: "Lavoratori notturni"
+  secondario: "Famiglie del quartiere"
+  
+tono: "Caldo, familiare, affidabile"
+
+differenziatori:
+  - "Unico panificio 24h di Milano zona Isola"
+  - "Lievito madre dal 1987"
+  - "Consegne notturne via WhatsApp"
+
+obiettivi_sito:
+  - "Aumentare ordini WhatsApp notturni"
+  - "Far conoscere il servizio 24h"
+  - "Creare senso di comunità di quartiere"
+"""
+    
+    # Salva esempio brand manual
+    with open('brand_manual.yaml', 'w', encoding='utf-8') as f:
+        f.write(brand_manual_example)
+    
+    # Genera sito
+    repo_url = builder.build_site(
+        brand_manual_path='brand_manual.yaml',
+        client_name='Il Pane dei Fratelli'
+    )
+    
+    print(f"\n🎉 Fatto! Il sito è qui: {repo_url}")
+
+# ============= PER COLAB =============
+
+def colab_setup():
+    """
+    Setup per Google Colab
+    """
+    # Installa dipendenze
+    import subprocess
+    import sys
+    
+    packages = ['PyGithub', 'pyyaml', 'requests']
+    for package in packages:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+    
+    print("✅ Dipendenze installate!")
+    print("\n📝 Ora configura le tue API keys:")
+    print("1. DeepSeek API: https://platform.deepseek.com/api_keys")
+    print("2. GitHub Token: https://github.com/settings/tokens")
+    print("\nPoi usa:")
+    print("builder = Nodo432SiteBuilder(DEEPSEEK_KEY, GITHUB_TOKEN)")
+    print("builder.build_site('brand_manual.yaml', 'Nome Cliente')")
+
+# Decommentare per eseguire in Colab
+# colab_setup()
+
+# Decommentare per test locale
+# if __name__ == "__main__":
+#     main()
